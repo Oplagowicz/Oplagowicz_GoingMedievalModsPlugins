@@ -92,6 +92,11 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
             return goapAction;
         }
 
+        protected override void AssignGoToTarget(Room room)
+        {
+            this.ValidateNextTarget();
+        }
+
         private bool ValidateNextTarget()
         {
             if (base.GetTarget(TargetIndex.A).ObjectInstance != null)
