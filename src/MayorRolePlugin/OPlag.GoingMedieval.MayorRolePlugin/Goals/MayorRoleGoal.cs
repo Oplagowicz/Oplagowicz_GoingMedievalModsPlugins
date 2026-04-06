@@ -10,6 +10,7 @@ using NSMedieval.RoomDetection;
 using NSMedieval.State;
 using NSMedieval.Utils.Pool.Janitors;
 using OPlag.GoingMedieval.MayorRolePlugin.Helpers;
+using OPlag.GoingMedieval.MayorRolePlugin.Services;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -66,18 +67,28 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
         private GoapAction MayorInspire()
         {
             GoapAction goapAction = new GoapAction("MayorInspire");
-            float num = global::UnityEngine.Random.value * 10f + 5f;
-            goapAction.TriggerAnimation("MayorIdle", ActionAnimationMode.Interrupt, false).CompleteAfterTimeExpires(num).FailAtCondition(new Func<bool>(base.RoleNotAssigned), false);
+            float duration = UnityEngine.Random.value * 10f + 5f;
+
+            goapAction
+                .TriggerAnimation("MayorIdle", ActionAnimationMode.Interrupt, false)
+                .CompleteAfterTimeExpires(duration)
+                .FailAtCondition(new Func<bool>(base.RoleNotAssigned), false);
+
             goapAction.OnInit = delegate
             {
-                this.workerTarget.Humanoid.MayorInspireHelper.onMayorInspireEffectors();
+                if (this.workerTarget != null && this.workerTarget.Humanoid != null)
+                {
+                    MayorInspireService.TryApplyMayorInspire(base.HumanoidInstance, this.workerTarget);
+                }
             };
+
             goapAction.OnComplete = delegate (ActionCompletionStatus state)
             {
                 MonoSingleton<AnimationController>.Instance.ForceQuitAgentAnimation(base.AgentOwner);
                 MonoSingleton<AnimationController>.Instance.SetAnimatorParameter(base.AgentOwner, "MayorIdle", false);
                 base.EquipProp(false);
             };
+
             return goapAction;
         }
 
