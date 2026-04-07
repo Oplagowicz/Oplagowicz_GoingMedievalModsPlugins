@@ -12,18 +12,23 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Services
     {
         private static MayorRoleSettings? _settings;
 
-        private static MayorRoleSettings GetSettings()
+        private static MayorRoleSettings? GetSettings()
         {
             if (_settings != null)
             {
                 return _settings;
             }
 
-            var log = MayorRolePlugin.Log ?? throw new InvalidOperationException("MayorRolePlugin.Log is not initialized. Ensure the plugin is initialized before calling GetSettings().");
-            _settings = MayorModSettingsLoader.Load(log) ?? throw new InvalidOperationException("Failed to load MayorRoleSettings.");
+            var log = MayorRolePlugin.Log;
+            if (log == null)
+            {
+                return null;
+            }
+
+            _settings = MayorModSettingsLoader.Load(log);
             return _settings;
         }
-    
+
 
         public static IEnumerable<string> GetMayorInspireEffectors(HumanoidInstance mayor)
         {

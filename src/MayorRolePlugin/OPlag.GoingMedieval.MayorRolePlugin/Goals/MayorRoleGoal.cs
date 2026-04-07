@@ -51,7 +51,7 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
                 return false;
             }
 
-            HumanoidInstance humanoidInstance = creatureBase as HumanoidInstance;
+            HumanoidInstance? humanoidInstance = creatureBase as HumanoidInstance;
             if (humanoidInstance == null)
             {
                 MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.PrepareData: humanoid is null.");
@@ -130,11 +130,21 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
 
             goapAction.OnInit = delegate
             {
-                if (this.workerTarget != null && this.workerTarget.Humanoid != null)
+                if (!this.ValidateNextTarget())
                 {
-                    bool applied = MayorInspireService.TryApplyMayorInspire(base.HumanoidInstance, this.workerTarget);
-                    MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.MayorInspire: applied = {applied}, target = {this.workerTarget.Humanoid.GetFullName()}");
+                    MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.MayorInspire: target validation failed before inspire.");
+                    return;
                 }
+
+                if (this.workerTarget == null || this.workerTarget.Humanoid == null)
+                {
+                    MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.MayorInspire: workerTarget is null after validation.");
+                    return;
+                }
+
+                bool applied = MayorInspireService.TryApplyMayorInspire(base.HumanoidInstance, this.workerTarget);
+                MayorRolePlugin.Log?.LogInfo(
+                    $"MayorRoleGoal.MayorInspire: applied = {applied}, target = {this.workerTarget.Humanoid.GetFullName()}");
             };
 
             goapAction.OnComplete = delegate (ActionCompletionStatus state)
@@ -152,14 +162,86 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
             this.ValidateNextTarget();
         }
 
+        private bool IsValidWorkerTarget(WorkerBehaviour? worker)
+        {
+            if (worker == null || worker.Humanoid == null)
+            {
+                return false;
+            }
+
+            if (worker.Humanoid == this.HumanoidInstance)
+            {
+                return false;
+            }
+
+            if (worker.Humanoid.HasDisposed || worker.Humanoid.HasDied || worker.Humanoid.HasFainted)
+            {
+                return false;
+            }
+
+            if (worker.WorkerGoapAgent == null)
+            {
+                return false;
+            }
+
+            if (worker.WorkerGoapAgent.CurrentHourType != HourType.Any &&
+                worker.WorkerGoapAgent.CurrentHourType != HourType.Working)
+            {
+                return false;
+            }
+
+            uint threshold = GlobalSaveController.CurrentVillageData.DateAndTime.HoursTotal - VisitHoursCooldown;
+            if (MayorLastVisitHelper.GetLastVisitHour(worker) >= threshold)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private WorkerBehaviour? ResolveWorkerTargetFromTargetA()
+        {
+            var target = base.GetTarget(TargetIndex.A);
+            if (!target.IsInitialized || target.ObjectInstance == null)
+            {
+                return null;
+            }
+
+            HumanoidInstance? targetHumanoid = target.ObjectInstance as HumanoidInstance;
+            if (targetHumanoid == null)
+            {
+                return null;
+            }
+
+            using (PooledList<WorkerBehaviour> npcsPooled =
+                MonoSingleton<NPCManager>.Instance.GetNPCsPooled<WorkerBehaviour>(null))
+            {
+                foreach (WorkerBehaviour w in npcsPooled)
+                {
+                    if (w != null && w.Humanoid == targetHumanoid)
+                    {
+                        return w;
+                    }
+                }
+            }
+
+            return null;
+        }
+
         protected bool ValidateNextTarget()
         {
-            if (base.GetTarget(TargetIndex.A).ObjectInstance != null)
+            WorkerBehaviour? existingWorker = this.ResolveWorkerTargetFromTargetA();
+            if (this.IsValidWorkerTarget(existingWorker))
             {
+                this.workerTarget = existingWorker;
+                MayorRolePlugin.Log?.LogInfo(
+                    $"MayorRoleGoal.ValidateNextTarget: reusing existing target = {this.workerTarget.Humanoid.GetFullName()}");
                 return true;
             }
 
             this.workerTarget = null;
+            base.SetTarget(TargetIndex.A, default(TargetObject), false);
+
             uint threshold = GlobalSaveController.CurrentVillageData.DateAndTime.HoursTotal - VisitHoursCooldown;
 
             using (PooledList<WorkerBehaviour> npcsPooled =
@@ -170,33 +252,7 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
 
                 foreach (WorkerBehaviour w in npcsPooled)
                 {
-                    if (w == null || w.Humanoid == null)
-                    {
-                        continue;
-                    }
-
-                    if (w.Humanoid == this.HumanoidInstance)
-                    {
-                        continue;
-                    }
-
-                    if (w.Humanoid.HasDisposed || w.Humanoid.HasDied || w.Humanoid.HasFainted)
-                    {
-                        continue;
-                    }
-
-                    if (MayorLastVisitHelper.GetLastVisitHour(w) >= threshold)
-                    {
-                        continue;
-                    }
-
-                    if (w.WorkerGoapAgent == null)
-                    {
-                        continue;
-                    }
-
-                    if (w.WorkerGoapAgent.CurrentHourType != HourType.Any &&
-                        w.WorkerGoapAgent.CurrentHourType != HourType.Working)
+                    if (!this.IsValidWorkerTarget(w))
                     {
                         continue;
                     }
@@ -212,7 +268,8 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
                 }
 
                 base.SetTarget(TargetIndex.A, new TargetObject(this.workerTarget.Humanoid), false);
-                MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.ValidateNextTarget: assigned target = {this.workerTarget.Humanoid.GetFullName()}");
+                MayorRolePlugin.Log?.LogInfo(
+                    $"MayorRoleGoal.ValidateNextTarget: assigned target = {this.workerTarget.Humanoid.GetFullName()}");
                 return true;
             }
         }

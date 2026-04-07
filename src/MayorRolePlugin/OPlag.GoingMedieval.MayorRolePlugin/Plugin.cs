@@ -24,6 +24,11 @@ namespace OPlag.GoingMedieval.MayorRolePlugin
 
             _harmony = new Harmony(pluginGuid);
             _harmony.PatchAll();
+            foreach (var method in _harmony.GetPatchedMethods())
+            {
+                Log.LogInfo($"Patched method: {method.DeclaringType?.FullName}.{method.Name}");
+            }
+
 
             Log.LogInfo("--> !Mayor Role Plugin loaded.! <--");
         }

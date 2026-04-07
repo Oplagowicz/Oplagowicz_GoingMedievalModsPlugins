@@ -6,11 +6,12 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
+using UnityEngine;
 
 namespace OPlag.GoingMedieval.MayorRolePlugin.Patches
 {
-    [HarmonyPatch(typeof(WorkerGoapAgent), "RefreshHourGoals")]
-    internal static class WorkerGoapAgent_RefreshHourGoals_Patch
+    [HarmonyPatch(typeof(WorkerGoapAgent), "Tick")]
+    internal static class WorkerGoapAgent_Tick_MayorForcePatch
     {
         private static readonly FieldInfo HumanoidField =
             AccessTools.Field(typeof(WorkerGoapAgent), "humanoid");
@@ -31,9 +32,12 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Patches
             AccessTools.Method(typeof(GoalScheduler), "EnableGoal");
 
         private const string GoalId = "MayorRoleGoal";
-        private const float GoalPriority = 0.55f;
+        private const float GoalPriority = 999f;
+        private const float RetrySeconds = 3f;
 
-        private static void Postfix(WorkerGoapAgent __instance)
+        private static readonly Dictionary<int, float> LastForceTimeByWorkerId = new Dictionary<int, float>();
+
+        private static void Postfix(WorkerGoapAgent __instance, float deltaTime)
         {
             try
             {
@@ -47,31 +51,16 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Patches
                 var roleInstance = roleOwner?.RoleInstance;
                 string roleId = roleInstance?.Blueprint?.GetID() ?? "<null>";
 
-                MayorRolePlugin.Log?.LogInfo(
-                    $"RefreshHourGoals hit: worker={humanoid.GetFullName()}, assigned={roleOwner?.AssignedRole}, roleId={roleId}, hour={__instance.CurrentHourType}");
-
-                if (!HasMayorRole(humanoid))
+                if (roleOwner == null || !roleOwner.AssignedRole || !string.Equals(roleId, "mayor", StringComparison.OrdinalIgnoreCase))
                 {
-                    MayorRolePlugin.Log?.LogInfo($"RefreshHourGoals: HasMayorRole=false for roleId={roleId}");
+                    LastForceTimeByWorkerId.Remove(humanoid.UniqueId);
                     return;
                 }
-
-                MayorRolePlugin.Log?.LogInfo(
-               $"Mayor schedule patch entered. HourType = {__instance.CurrentHourType}");
-
-                if (__instance.CurrentHourType != HourType.RoleJob)
-                {
-                    MayorRolePlugin.Log?.LogInfo(
-                    $"Mayor schedule patch skipped due to hour type: {__instance.CurrentHourType}");
-                    return;
-                }
-
-
 
                 object goalScheduler = GoalSchedulerProperty.GetValue(__instance);
                 if (goalScheduler == null)
                 {
-                    MayorRolePlugin.Log?.LogError("Mayor schedule patch: GoalScheduler is null.");
+                    MayorRolePlugin.Log?.LogError($"MayorForcePatch: GoalScheduler is null for {humanoid.GetFullName()}");
                     return;
                 }
 
@@ -82,53 +71,40 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Patches
 
                     if (!goal.AgentTypeCheck())
                     {
-                        MayorRolePlugin.Log?.LogError("Mayor schedule patch: AgentTypeCheck failed.");
+                        MayorRolePlugin.Log?.LogError($"MayorForcePatch: AgentTypeCheck failed for {humanoid.GetFullName()}");
                         return;
                     }
 
                     if (!goal.ShouldBeAdded())
                     {
-                        MayorRolePlugin.Log?.LogInfo("Mayor schedule patch: ShouldBeAdded returned false.");
+                        MayorRolePlugin.Log?.LogInfo($"MayorForcePatch: ShouldBeAdded returned false for {humanoid.GetFullName()}");
                         return;
                     }
 
                     GoalPriorityData goalPriorityData = new GoalPriorityData(goal, GoalPriority);
                     AddToPoolMethod.Invoke(goalScheduler, new object[] { goalPriorityData });
 
-                    MayorRolePlugin.Log?.LogInfo("Mayor schedule patch: MayorRoleGoal added to GoalScheduler pool.");
+                    MayorRolePlugin.Log?.LogInfo($"MayorForcePatch: added MayorRoleGoal to pool for {humanoid.GetFullName()}");
                 }
 
                 SetBasePriorityMethod.Invoke(goalScheduler, new object[] { GoalId, GoalPriority });
                 EnableGoalMethod.Invoke(goalScheduler, new object[] { GoalId });
 
-                MayorRolePlugin.Log?.LogInfo("Mayor schedule patch: MayorRoleGoal enabled.");
+                float now = Time.time;
+                if (!LastForceTimeByWorkerId.TryGetValue(humanoid.UniqueId, out float lastForce) || now - lastForce >= RetrySeconds)
+                {
+                    LastForceTimeByWorkerId[humanoid.UniqueId] = now;
+
+                    MayorRolePlugin.Log?.LogInfo(
+                        $"MayorForcePatch: forcing MayorRoleGoal for {humanoid.GetFullName()}, roleId={roleId}");
+
+                    __instance.ForceNextGoalExclusive(GoalId);
+                }
             }
             catch (Exception ex)
             {
-                MayorRolePlugin.Log?.LogError($"Mayor schedule patch failed: {ex}");
+                MayorRolePlugin.Log?.LogError($"MayorForcePatch failed: {ex}");
             }
-        }
-
-        private static bool HasMayorRole(HumanoidInstance humanoid)
-        {
-            if (humanoid == null)
-            {
-                return false;
-            }
-
-            var roleOwner = humanoid.ActiveBehaviour?.HumanoidRoleOwner;
-            if (roleOwner == null || !roleOwner.AssignedRole)
-            {
-                return false;
-            }
-
-            var roleInstance = roleOwner.RoleInstance;
-            if (roleInstance == null || roleInstance.Blueprint == null)
-            {
-                return false;
-            }
-
-            return string.Equals(roleInstance.Blueprint.GetID(), "mayor", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
