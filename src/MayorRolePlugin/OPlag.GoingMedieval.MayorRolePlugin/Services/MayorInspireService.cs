@@ -19,12 +19,11 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Services
                 return _settings;
             }
 
-            _settings = Repository<MayorRoleSettingsData, MayorRoleSettings>
-                .Instance
-                .GetData<MayorRoleSettings>();
-
+            var log = MayorRolePlugin.Log ?? throw new InvalidOperationException("MayorRolePlugin.Log is not initialized. Ensure the plugin is initialized before calling GetSettings().");
+            _settings = MayorModSettingsLoader.Load(log) ?? throw new InvalidOperationException("Failed to load MayorRoleSettings.");
             return _settings;
         }
+    
 
         public static IEnumerable<string> GetMayorInspireEffectors(HumanoidInstance mayor)
         {

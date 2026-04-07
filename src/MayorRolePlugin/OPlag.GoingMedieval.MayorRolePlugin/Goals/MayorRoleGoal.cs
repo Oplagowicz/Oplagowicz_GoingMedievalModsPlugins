@@ -6,6 +6,7 @@ using NSMedieval.Goap.Actions;
 using NSMedieval.Goap.Goals;
 using NSMedieval.Manager;
 using NSMedieval.Pathfinding;
+using NSMedieval.Roles;
 using NSMedieval.RoomDetection;
 using NSMedieval.State;
 using NSMedieval.Utils.Pool.Janitors;
@@ -20,18 +21,65 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
 {
     public class MayorRoleGoal : RoleGoal
     {
+        private const uint VisitHoursCooldown = 3U;
+        private WorkerBehaviour? workerTarget;
+
         public MayorRoleGoal(Agent selfAgent)
-        : base("MayorRoleGoal", selfAgent, GoalInterruptMode.HigherPriority)
+            : base("MayorRoleGoal", selfAgent, GoalInterruptMode.HigherPriority)
         {
             base.AllowedRoleId = "mayor";
         }
 
         protected override IEnumerable<GoapAction> GetNextAction()
         {
-         yield return this.GotoAction();
-         yield return this.MayorInspire();
-         yield return this.IdleAction();
-         yield break;
+            yield return this.GotoAction();
+            yield return this.MayorInspire();
+            yield return this.IdleAction();
+        }
+
+        public override bool CanStart(bool isForced = false)
+        {
+            return base.CanStart(isForced) && this.ValidateNextTarget();
+        }
+
+        protected override bool PrepareData()
+        {
+            CreatureBase creatureBase = (CreatureBase)base.AgentOwner;
+            if (creatureBase is AnimalInstance)
+            {
+                MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.PrepareData: agent is animal, abort.");
+                return false;
+            }
+
+            HumanoidInstance humanoidInstance = creatureBase as HumanoidInstance;
+            if (humanoidInstance == null)
+            {
+                MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.PrepareData: humanoid is null.");
+                return false;
+            }
+
+            if (!humanoidInstance.WorkerBehaviour.HumanoidRoleOwner.AssignedRole)
+            {
+                MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.PrepareData: no assigned role.");
+                return false;
+            }
+
+            RoleInstance roleInstance = humanoidInstance.ActiveBehaviour.HumanoidRoleOwner.RoleInstance;
+            if (roleInstance == null)
+            {
+                MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.PrepareData: roleInstance is null.");
+                return false;
+            }
+
+            if (roleInstance.Blueprint == null || !roleInstance.Blueprint.GetID().Equals(this.AllowedRoleId))
+            {
+                MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.PrepareData: role mismatch, got '{roleInstance.Blueprint?.GetID()}'.");
+                return false;
+            }
+
+            bool valid = this.ValidateNextTarget();
+            MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.PrepareData: target valid = {valid}");
+            return valid;
         }
 
         private GoapAction IdleAction()
@@ -41,27 +89,33 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
 
         private GoapAction GotoAction()
         {
-            GoapAction goapAction = GoToActions.GoToTarget(TargetIndex.A, PathCompleteMode.ExactPosition, default(Vector3)).FailIfTargetDisposedOrNull(TargetIndex.A).FailAtCondition(new Func<bool>(base.RoleNotAssigned), false);
+            GoapAction goapAction = GoToActions
+                .GoToTarget(TargetIndex.A, PathCompleteMode.ExactPosition, default(Vector3))
+                .FailIfTargetDisposedOrNull(TargetIndex.A)
+                .FailAtCondition(new Func<bool>(base.RoleNotAssigned), false);
+
             goapAction.OnInit = delegate
             {
                 base.EquipProp(true);
             };
+
             goapAction.OnComplete = delegate (ActionCompletionStatus state)
             {
                 MonoSingleton<AnimationController>.Instance.ForceQuitAgentAnimation(base.AgentOwner);
                 base.EquipProp(false);
+
                 if (state != ActionCompletionStatus.Success)
                 {
                     return;
                 }
-                base.HumanoidInstance.FaceObject(base.GetTarget(TargetIndex.A).ObjectInstance.GetPosition());
-            };
-            return goapAction;
-        }
 
-        public override bool CanStart(bool isForced = false)
-        {
-            return base.CanStart(false) && this.ValidateNextTarget();
+                if (base.GetTarget(TargetIndex.A).ObjectInstance != null)
+                {
+                    base.HumanoidInstance.FaceObject(base.GetTarget(TargetIndex.A).ObjectInstance.GetPosition());
+                }
+            };
+
+            return goapAction;
         }
 
         private GoapAction MayorInspire()
@@ -78,7 +132,8 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
             {
                 if (this.workerTarget != null && this.workerTarget.Humanoid != null)
                 {
-                    MayorInspireService.TryApplyMayorInspire(base.HumanoidInstance, this.workerTarget);
+                    bool applied = MayorInspireService.TryApplyMayorInspire(base.HumanoidInstance, this.workerTarget);
+                    MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.MayorInspire: applied = {applied}, target = {this.workerTarget.Humanoid.GetFullName()}");
                 }
             };
 
@@ -97,7 +152,7 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
             this.ValidateNextTarget();
         }
 
-        private bool ValidateNextTarget()
+        protected bool ValidateNextTarget()
         {
             if (base.GetTarget(TargetIndex.A).ObjectInstance != null)
             {
@@ -108,19 +163,14 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
             uint threshold = GlobalSaveController.CurrentVillageData.DateAndTime.HoursTotal - VisitHoursCooldown;
 
             using (PooledList<WorkerBehaviour> npcsPooled =
-                   MonoSingleton<NPCManager>.Instance.GetNPCsPooled<WorkerBehaviour>(null))
+                MonoSingleton<NPCManager>.Instance.GetNPCsPooled<WorkerBehaviour>(null))
             {
                 npcsPooled.Sort((a, b) =>
                     MayorLastVisitHelper.GetLastVisitHour(a).CompareTo(MayorLastVisitHelper.GetLastVisitHour(b)));
 
                 foreach (WorkerBehaviour w in npcsPooled)
                 {
-                    if (w == null)
-                    {
-                        continue;
-                    }
-
-                    if (w.Humanoid == null)
+                    if (w == null || w.Humanoid == null)
                     {
                         continue;
                     }
@@ -140,6 +190,11 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
                         continue;
                     }
 
+                    if (w.WorkerGoapAgent == null)
+                    {
+                        continue;
+                    }
+
                     if (w.WorkerGoapAgent.CurrentHourType != HourType.Any &&
                         w.WorkerGoapAgent.CurrentHourType != HourType.Working)
                     {
@@ -152,18 +207,14 @@ namespace OPlag.GoingMedieval.MayorRolePlugin.Goals
 
                 if (this.workerTarget == null)
                 {
+                    MayorRolePlugin.Log?.LogInfo("MayorRoleGoal.ValidateNextTarget: no valid worker target found.");
                     return false;
                 }
 
                 base.SetTarget(TargetIndex.A, new TargetObject(this.workerTarget.Humanoid), false);
+                MayorRolePlugin.Log?.LogInfo($"MayorRoleGoal.ValidateNextTarget: assigned target = {this.workerTarget.Humanoid.GetFullName()}");
                 return true;
             }
         }
-
-        private const uint VisitHoursCooldown = 3U;
-
-        private WorkerBehaviour? workerTarget;
-
-
     }
 }
